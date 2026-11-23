@@ -5,6 +5,7 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { connectDB } from './config/db.js';
 import { errorHandler } from './middleware/errorhandler.js';
+import authRoutes from './routes/authRoutes.js';
 
 dotenv.config();
 
@@ -37,6 +38,7 @@ app.get('/api/health', (req, res) => {
     timestamp: new Date().toISOString(),
   });
 });
+app.use('/api/auth', authRoutes);
 
 app.use(errorHandler);
 

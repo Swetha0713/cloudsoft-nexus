@@ -32,7 +32,7 @@ const seedDatabase = async () => {
     // 2. Create Users (using User.create so pre('save') password hashing runs)
     const admin = await User.create({
       tenantId: cloudsoftHQ._id,
-      name: 'Ashutosh Kumar',
+      name: 'Swetha Dixt',
       email: 'admin@cloudsoft.io',
       passwordHash: 'Password@123',
       role: 'SuperAdmin',
