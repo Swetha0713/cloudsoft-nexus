@@ -1,0 +1,703 @@
+import { useEffect, useState, useCallback } from 'react';
+import {
+  ShieldCheck,
+  Rocket,
+  AlertTriangle,
+  FileText,
+  LogOut,
+  Plus,
+  RefreshCw,
+  Activity,
+  CheckCircle2,
+  Clock,
+  Building2,
+} from 'lucide-react';
+import { API_BASE, apiRequest } from '../api';
+
+const ALLOWED_TRANSITIONS = {
+  Queued: ['Provisioning'],
+  Provisioning: ['HealthCheck', 'Rollback'],
+  HealthCheck: ['Live', 'Rollback'],
+  Live: ['Rollback'],
+  Rollback: ['Queued'],
+};
+
+const STATUS_BADGE = {
+  Queued: 'bg-slate-700/60 text-slate-200 border-slate-600',
+  Provisioning: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+  HealthCheck: 'bg-sky-500/15 text-sky-300 border-sky-500/30',
+  Live: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
+  Rollback: 'bg-rose-500/15 text-rose-300 border-rose-500/30',
+  Open: 'bg-sky-500/15 text-sky-300 border-sky-500/30',
+  InProgress: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+  Escalated: 'bg-rose-500/15 text-rose-300 border-rose-500/30',
+  Resolved: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
+};
+
+const PIPELINE_STAGES = ['Queued', 'Provisioning', 'HealthCheck', 'Live'];
+
+export default function Dashboard({ user, token, onLogout }) {
+  const isStaff = user.role === 'SuperAdmin' || user.role === 'Engineer';
+
+  const [activeTab, setActiveTab] = useState('deployments');
+  const [selectedTenant, setSelectedTenant] = useState('');
+  const [tenants, setTenants] = useState([]);
+  const [metrics, setMetrics] = useState(null);
+  const [deployments, setDeployments] = useState([]);
+  const [tickets, setTickets] = useState([]);
+  const [auditLogs, setAuditLogs] = useState([]);
+  const [sseConnected, setSseConnected] = useState(false);
+  const [toast, setToast] = useState('');
+  const [error, setError] = useState('');
+
+  const [showDepForm, setShowDepForm] = useState(false);
+  const [depForm, setDepForm] = useState({
+    tenantId: '',
+    serviceName: '',
+    version: 'v1.0.0',
+    environment: 'Staging',
+  });
+
+  const [showTicketForm, setShowTicketForm] = useState(false);
+  const [ticketForm, setTicketForm] = useState({
+    tenantId: '',
+    title: '',
+    description: '',
+    priority: 'P2',
+  });
+
+  const triggerToast = useCallback((msg) => {
+    setToast(msg);
+    setTimeout(() => setToast(''), 4500);
+  }, []);
+
+  const fetchAllData = useCallback(async () => {
+    try {
+      const qs = isStaff && selectedTenant ? `?tenantId=${selectedTenant}` : '';
+      const requests = [
+        apiRequest(`/api/ops/analytics${qs}`),
+        apiRequest(`/api/deployments${qs}`),
+        apiRequest(`/api/tickets${qs}`),
+        apiRequest(`/api/ops/audit-logs${qs}`),
+      ];
+      if (isStaff) requests.push(apiRequest('/api/ops/tenants'));
+
+      const [analyticsRes, depRes, ticketRes, auditRes, tenantRes] = await Promise.all(requests);
+      setMetrics(analyticsRes.metrics);
+      setDeployments(depRes.deployments);
+      setTickets(ticketRes.tickets);
+      setAuditLogs(auditRes.logs);
+      if (tenantRes?.tenants) {
+        setTenants(tenantRes.tenants);
+      }
+    } catch (err) {
+      setError(err.message);
+    }
+  }, [isStaff, selectedTenant]);
+
+  useEffect(() => {
+    fetchAllData();
+  }, [fetchAllData]);
+
+  useEffect(() => {
+    if (!token) return;
+    const streamUrl = `${API_BASE}/api/ops/stream?token=${encodeURIComponent(token)}`;
+    const es = new EventSource(streamUrl);
+
+    es.addEventListener('connected', () => setSseConnected(true));
+    es.addEventListener('deployment_created', () => {
+      triggerToast('Live Update: New deployment queued');
+      fetchAllData();
+    });
+    es.addEventListener('deployment_updated', () => {
+      triggerToast('Live Update: Deployment FSM stage transitioned');
+      fetchAllData();
+    });
+    es.addEventListener('ticket_created', () => {
+      triggerToast('Live Update: New incident ticket raised');
+      fetchAllData();
+    });
+    es.addEventListener('ticket_updated', () => {
+      triggerToast('Live Update: Ticket status updated');
+      fetchAllData();
+    });
+    es.addEventListener('sla_breached', (e) => {
+      const data = JSON.parse(e.data);
+      triggerToast(`SLA BREACH ALERT: ${data.ticketCode} (${data.priority}) auto-escalated!`);
+      fetchAllData();
+    });
+    es.onerror = () => setSseConnected(false);
+
+    return () => es.close();
+  }, [token, fetchAllData, triggerToast]);
+
+  const handleTransition = async (id, nextStatus) => {
+    setError('');
+    try {
+      await apiRequest(`/api/deployments/${id}/transition`, {
+        method: 'PATCH',
+        body: JSON.stringify({ nextStatus, note: `Moved to ${nextStatus} via portal` }),
+      });
+      await fetchAllData();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const handleCreateDeployment = async (e) => {
+    e.preventDefault();
+    setError('');
+    try {
+      await apiRequest('/api/deployments', {
+        method: 'POST',
+        body: JSON.stringify({
+          ...depForm,
+          tenantId: depForm.tenantId || tenants[0]?._id,
+        }),
+      });
+      setDepForm({ tenantId: '', serviceName: '', version: 'v1.0.0', environment: 'Staging' });
+      setShowDepForm(false);
+      await fetchAllData();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const handleCreateTicket = async (e) => {
+    e.preventDefault();
+    setError('');
+    try {
+      await apiRequest('/api/tickets', {
+        method: 'POST',
+        body: JSON.stringify({
+          ...ticketForm,
+          tenantId: isStaff ? ticketForm.tenantId || tenants[0]?._id : undefined,
+        }),
+      });
+      setTicketForm({ tenantId: '', title: '', description: '', priority: 'P2' });
+      setShowTicketForm(false);
+      await fetchAllData();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const handleTicketStatus = async (id, status) => {
+    setError('');
+    try {
+      await apiRequest(`/api/tickets/${id}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
+      });
+      await fetchAllData();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-20">
+        <div className="max-w-7xl mx-auto px-6 py-3.5 flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-lg bg-indigo-600/20 border border-indigo-500/30 text-indigo-400">
+              <ShieldCheck className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-bold tracking-tight">CloudSoft Nexus</span>
+                <span
+                  className={`inline-flex items-center gap-1.5 text-[11px] px-2 py-0.5 rounded-full border ${
+                    sseConnected
+                      ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
+                      : 'bg-slate-800 text-slate-400 border-slate-700'
+                  }`}
+                >
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      sseConnected ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'
+                    }`}
+                  />
+                  {sseConnected ? 'SSE Live' : 'Connecting'}
+                </span>
+              </div>
+              <p className="text-xs text-slate-400">
+                {user.tenant?.name || 'CloudSoft Workspace'}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            {isStaff && (
+              <div className="flex items-center gap-2 bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5">
+                <Building2 className="w-4 h-4 text-slate-400" />
+                <select
+                  value={selectedTenant}
+                  onChange={(e) => setSelectedTenant(e.target.value)}
+                  className="bg-transparent text-xs text-slate-200 focus:outline-none"
+                >
+                  <option value="" className="bg-slate-900">All Tenants</option>
+                  {tenants.map((t) => (
+                    <option key={t._id} value={t._id} className="bg-slate-900">
+                      {t.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <div className="text-right hidden sm:block">
+              <div className="text-xs font-semibold">{user.name}</div>
+              <div className="text-[11px] text-indigo-400">{user.role}</div>
+            </div>
+
+            <button
+              onClick={fetchAllData}
+              title="Refresh data"
+              className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
+            >
+              <RefreshCw className="w-4 h-4" />
+            </button>
+
+            <button
+              onClick={onLogout}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-800 hover:bg-rose-600/20 hover:text-rose-300 text-xs font-medium transition"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              Logout
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-7xl mx-auto px-6 py-6 space-y-6">
+        {toast && (
+          <div className="px-4 py-3 rounded-xl bg-indigo-500/15 border border-indigo-500/40 text-indigo-200 text-sm flex items-center gap-2">
+            <Activity className="w-4 h-4 text-indigo-400 shrink-0" />
+            <span>{toast}</span>
+          </div>
+        )}
+
+        {error && (
+          <div className="px-4 py-3 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-200 text-sm">
+            {error}
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <KpiCard
+            title="Total Deployments"
+            value={metrics?.totalDeployments ?? '-'}
+            sub={`${metrics?.liveDeployments ?? 0} Live in Prod`}
+            icon={<Rocket className="w-5 h-5 text-indigo-400" />}
+          />
+          <KpiCard
+            title="Active Incidents"
+            value={metrics?.openTickets ?? '-'}
+            sub={`${metrics?.totalTickets ?? 0} Total Tickets`}
+            icon={<AlertTriangle className="w-5 h-5 text-amber-400" />}
+          />
+          <KpiCard
+            title="SLA Breaches"
+            value={metrics?.breachedTickets ?? '-'}
+            sub="Auto-escalated by Worker"
+            icon={<Clock className="w-5 h-5 text-rose-400" />}
+          />
+          <KpiCard
+            title="SLA Compliance"
+            value={metrics ? `${metrics.slaComplianceRate}%` : '-'}
+            sub="Target ≥ 95%"
+            icon={<CheckCircle2 className="w-5 h-5 text-emerald-400" />}
+          />
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-3">
+          <div className="flex gap-2">
+            {[
+              { id: 'deployments', label: 'Deployments (FSM)', icon: Rocket },
+              { id: 'tickets', label: 'Incidents & SLA', icon: AlertTriangle },
+              { id: 'audit', label: 'Audit Ledger', icon: FileText },
+            ].map((tab) => {
+              const Icon = tab.icon;
+              return (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveTab(tab.id)}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition ${
+                    activeTab === tab.id
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
+                  }`}
+                >
+                  <Icon className="w-4 h-4" />
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {activeTab === 'deployments' && isStaff && (
+            <button
+              onClick={() => setShowDepForm((v) => !v)}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium transition"
+            >
+              <Plus className="w-4 h-4" />
+              New Deployment
+            </button>
+          )}
+
+          {activeTab === 'tickets' && (
+            <button
+              onClick={() => setShowTicketForm((v) => !v)}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium transition"
+            >
+              <Plus className="w-4 h-4" />
+              Raise Incident
+            </button>
+          )}
+        </div>
+
+        {activeTab === 'deployments' && (
+          <div className="space-y-4">
+            {showDepForm && isStaff && (
+              <form
+                onSubmit={handleCreateDeployment}
+                className="bg-slate-900 border border-slate-800 rounded-xl p-5 grid grid-cols-1 md:grid-cols-5 gap-3 items-end"
+              >
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Tenant</label>
+                  <select
+                    value={depForm.tenantId}
+                    onChange={(e) => setDepForm({ ...depForm, tenantId: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm"
+                  >
+                    {tenants.map((t) => (
+                      <option key={t._id} value={t._id}>{t.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Service Name</label>
+                  <input
+                    required
+                    placeholder="auth-microservice"
+                    value={depForm.serviceName}
+                    onChange={(e) => setDepForm({ ...depForm, serviceName: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Version</label>
+                  <input
+                    required
+                    value={depForm.version}
+                    onChange={(e) => setDepForm({ ...depForm, version: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Environment</label>
+                  <select
+                    value={depForm.environment}
+                    onChange={(e) => setDepForm({ ...depForm, environment: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm"
+                  >
+                    <option value="Staging">Staging</option>
+                    <option value="Production">Production</option>
+                  </select>
+                </div>
+                <button
+                  type="submit"
+                  className="bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-4 py-2 rounded-lg"
+                >
+                  Queue Release
+                </button>
+              </form>
+            )}
+
+            <div className="grid gap-4">
+              {deployments.map((dep) => {
+                const nextStates = ALLOWED_TRANSITIONS[dep.status] || [];
+                return (
+                  <div
+                    key={dep._id}
+                    className="bg-slate-900 border border-slate-800 rounded-xl p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4"
+                  >
+                    <div className="space-y-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="font-semibold text-base">{dep.serviceName}</h3>
+                        <span className="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono">
+                          {dep.version}
+                        </span>
+                        <span className="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-400">
+                          {dep.environment}
+                        </span>
+                        <span
+                          className={`text-xs px-2.5 py-0.5 rounded-full border font-medium ${
+                            STATUS_BADGE[dep.status] || ''
+                          }`}
+                        >
+                          {dep.status}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-400">
+                        Tenant: <span className="text-slate-200">{dep.tenantId?.name}</span> •
+                        Triggered by {dep.triggeredBy?.name || 'System'} • History:{' '}
+                        {dep.stateHistory?.length || 0} transitions
+                      </p>
+                      <FsmPipeline status={dep.status} />
+                    </div>
+
+                    {isStaff && (
+                      <div className="flex flex-wrap gap-2">
+                        {nextStates.map((next) => (
+                          <button
+                            key={next}
+                            onClick={() => handleTransition(dep._id, next)}
+                            className={`px-3.5 py-1.5 rounded-lg text-xs font-medium border transition ${
+                              next === 'Rollback'
+                                ? 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border-rose-500/30'
+                                : 'bg-indigo-600 hover:bg-indigo-500 text-white border-indigo-500'
+                            }`}
+                          >
+                            Move → {next}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'tickets' && (
+          <div className="space-y-4">
+            {showTicketForm && (
+              <form
+                onSubmit={handleCreateTicket}
+                className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-3"
+              >
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  {isStaff && (
+                    <div>
+                      <label className="block text-xs text-slate-400 mb-1">Tenant</label>
+                      <select
+                        value={ticketForm.tenantId}
+                        onChange={(e) => setTicketForm({ ...ticketForm, tenantId: e.target.value })}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm"
+                      >
+                        {tenants.map((t) => (
+                          <option key={t._id} value={t._id}>{t.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  <div className={isStaff ? '' : 'md:col-span-2'}>
+                    <label className="block text-xs text-slate-400 mb-1">Incident Title</label>
+                    <input
+                      required
+                      placeholder="Database connection pool exhausted"
+                      value={ticketForm.title}
+                      onChange={(e) => setTicketForm({ ...ticketForm, title: e.target.value })}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Priority (SLA)</label>
+                    <select
+                      value={ticketForm.priority}
+                      onChange={(e) => setTicketForm({ ...ticketForm, priority: e.target.value })}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm"
+                    >
+                      <option value="P1">P1 — Critical (30m SLA)</option>
+                      <option value="P2">P2 — High (2h SLA)</option>
+                      <option value="P3">P3 — Normal (24h SLA)</option>
+                    </select>
+                  </div>
+                </div>
+                <textarea
+                  required
+                  rows={2}
+                  placeholder="Describe the incident impact..."
+                  value={ticketForm.description}
+                  onChange={(e) => setTicketForm({ ...ticketForm, description: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm"
+                />
+                <button
+                  type="submit"
+                  className="bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-4 py-2 rounded-lg"
+                >
+                  Submit Incident
+                </button>
+              </form>
+            )}
+
+            <div className="grid gap-4">
+              {tickets.map((t) => (
+                <div
+                  key={t._id}
+                  className="bg-slate-900 border border-slate-800 rounded-xl p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4"
+                >
+                  <div className="space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-mono text-xs text-indigo-400 font-semibold">
+                        {t.ticketCode}
+                      </span>
+                      <span className="text-xs px-2 py-0.5 rounded bg-slate-800 font-semibold">
+                        {t.priority}
+                      </span>
+                      <span
+                        className={`text-xs px-2.5 py-0.5 rounded-full border font-medium ${
+                          STATUS_BADGE[t.status] || ''
+                        }`}
+                      >
+                        {t.status}
+                      </span>
+                      {t.slaBreached && (
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-rose-600 text-white font-semibold">
+                          SLA BREACHED
+                        </span>
+                      )}
+                    </div>
+                    <h3 className="font-semibold text-sm">{t.title}</h3>
+                    <p className="text-xs text-slate-400">{t.description}</p>
+                    <p className="text-[11px] text-slate-500">
+                      Tenant: {t.tenantId?.name} • SLA Deadline:{' '}
+                      {new Date(t.slaDeadline).toLocaleString()}
+                    </p>
+                  </div>
+
+                  {isStaff && (
+                    <div className="flex flex-wrap gap-2">
+                      {['InProgress', 'Escalated', 'Resolved'].map((st) => (
+                        <button
+                          key={st}
+                          disabled={t.status === st}
+                          onClick={() => handleTicketStatus(t._id, st)}
+                          className="px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 disabled:opacity-40 transition"
+                        >
+                          {st}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'audit' && (
+          <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-950/60 text-slate-400 border-b border-slate-800">
+                <tr>
+                  <th className="px-4 py-3">Timestamp</th>
+                  <th className="px-4 py-3">Tenant</th>
+                  <th className="px-4 py-3">Actor & Role</th>
+                  <th className="px-4 py-3">Action</th>
+                  <th className="px-4 py-3">Details</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/70">
+                {auditLogs.map((log) => (
+                  <tr key={log._id} className="hover:bg-slate-800/30">
+                    <td className="px-4 py-3 text-slate-400 whitespace-nowrap">
+                      {new Date(log.createdAt).toLocaleString()}
+                    </td>
+                    <td className="px-4 py-3 font-medium">{log.tenantId?.name || 'System'}</td>
+                    <td className="px-4 py-3">
+                      {log.actorId?.name || 'Worker'}{' '}
+                      <span className="text-indigo-400">({log.actorRole})</span>
+                    </td>
+                    <td className="px-4 py-3 font-mono text-emerald-300">{log.action}</td>
+                    <td className="px-4 py-3">
+                      <AuditDetails details={log.details} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+function KpiCard({ title, value, sub, icon }) {
+  return (
+    <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 flex items-start justify-between">
+      <div>
+        <p className="text-xs text-slate-400">{title}</p>
+        <p className="text-2xl font-bold mt-1">{value}</p>
+        <p className="text-[11px] text-slate-500 mt-1">{sub}</p>
+      </div>
+      <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800">{icon}</div>
+    </div>
+  );
+}
+
+function FsmPipeline({ status }) {
+  const isRollback = status === 'Rollback';
+  const activeIdx = PIPELINE_STAGES.indexOf(status);
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 pt-2">
+      {PIPELINE_STAGES.map((stage, idx) => {
+        const isCompleted = !isRollback && activeIdx > idx;
+        const isCurrent = !isRollback && activeIdx === idx;
+        return (
+          <div key={stage} className="flex items-center gap-1.5">
+            <span
+              className={`px-2 py-0.5 rounded text-[11px] font-medium border ${
+                isCurrent
+                  ? 'bg-indigo-600 text-white border-indigo-400'
+                  : isCompleted
+                  ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                  : 'bg-slate-950 text-slate-500 border-slate-800'
+              }`}
+            >
+              {stage}
+            </span>
+            {idx < PIPELINE_STAGES.length - 1 && (
+              <span className="text-slate-600 text-xs">→</span>
+            )}
+          </div>
+        );
+      })}
+      {isRollback && (
+        <span className="ml-1 px-2 py-0.5 rounded text-[11px] font-semibold bg-rose-500/20 text-rose-300 border border-rose-500/40">
+          ↺ Rolled Back
+        </span>
+      )}
+    </div>
+  );
+}
+
+function AuditDetails({ details }) {
+  const entries = Object.entries(details || {});
+  if (entries.length === 0) return <span className="text-slate-500">—</span>;
+
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {entries.map(([key, value]) => {
+        const formatted =
+          key.toLowerCase().includes('deadline') && value
+            ? new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            : String(value);
+        return (
+          <span
+            key={key}
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-950 border border-slate-800 text-[11px]"
+          >
+            <span className="text-slate-500">{key}:</span>
+            <span className="text-slate-200 font-medium">{formatted}</span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
