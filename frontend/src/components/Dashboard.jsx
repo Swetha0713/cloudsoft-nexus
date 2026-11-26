@@ -18,8 +18,10 @@ import {
   UserCheck,
   UserX,
   Link2,
+  KeyRound,
 } from 'lucide-react';
 import { API_BASE, apiRequest } from '../api';
+import ChangePasswordModal from './ChangePasswordModal';
 
 const ALLOWED_TRANSITIONS = {
   Queued: ['Provisioning'],
@@ -60,6 +62,8 @@ export default function Dashboard({ user, token, onLogout }) {
   const [sseConnected, setSseConnected] = useState(false);
   const [toast, setToast] = useState('');
   const [error, setError] = useState('');
+
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
 
   const [showDepForm, setShowDepForm] = useState(false);
   const [depForm, setDepForm] = useState({
@@ -351,6 +355,15 @@ export default function Dashboard({ user, token, onLogout }) {
               className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
             >
               <RefreshCw className="w-4 h-4" />
+            </button>
+
+            <button
+              onClick={() => setShowPasswordModal(true)}
+              title="Change password"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-800 hover:bg-indigo-600/20 hover:text-indigo-300 text-xs font-medium transition"
+            >
+              <KeyRound className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Security</span>
             </button>
 
             <button
@@ -939,6 +952,16 @@ export default function Dashboard({ user, token, onLogout }) {
           </div>
         )}
       </main>
+
+      {showPasswordModal && (
+        <ChangePasswordModal
+          onClose={() => setShowPasswordModal(false)}
+          onPasswordChanged={() => {
+            setShowPasswordModal(false);
+            onLogout();
+          }}
+        />
+      )}
     </div>
   );
 }
