@@ -9,6 +9,7 @@ import authRoutes from './routes/authRoutes.js';
 import deploymentRoutes from './routes/deploymentRoutes.js';
 import ticketRoutes from './routes/ticketRoutes.js';
 import opsRoutes from './routes/opsRoutes.js';
+import teamRoutes from './routes/teamRoutes.js';
 import { startSlaWorker } from './workers/slaWorker.js';
 
 dotenv.config();
@@ -46,6 +47,7 @@ app.use('/api', apiLimiter);
 app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/refresh', authLimiter);
 app.use('/api/auth/register-tenant', authLimiter);
+app.use('/api/team/accept-invite', authLimiter);
 
 // 3. Body Parser
 app.use(express.json({ limit: '10kb' }));
@@ -64,6 +66,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/deployments', deploymentRoutes);
 app.use('/api/tickets', ticketRoutes);
 app.use('/api/ops', opsRoutes);
+app.use('/api/team', teamRoutes);
 
 // 5. Centralized Error Handler (Always LAST)
 app.use(errorHandler);

@@ -2,20 +2,29 @@ import { useEffect, useState } from 'react';
 import { apiRequest } from './api';
 import LoginView from './components/LoginView';
 import RegisterTenantView from './components/RegisterTenantView';
+import AcceptInviteView from './components/AcceptInviteView';
 import Dashboard from './components/Dashboard';
+
+const getRouteState = () => {
+  const path = window.location.pathname;
+  if (path === '/join') {
+    const params = new URLSearchParams(window.location.search);
+    return { view: 'join', inviteToken: params.get('token') || '' };
+  }
+  if (path === '/register') {
+    return { view: 'register', inviteToken: '' };
+  }
+  return { view: 'login', inviteToken: '' };
+};
 
 export default function App() {
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(() => localStorage.getItem('csn_access_token'));
   const [checking, setChecking] = useState(true);
-  const [authView, setAuthView] = useState(() =>
-    window.location.pathname === '/register' ? 'register' : 'login'
-  );
+  const [route, setRoute] = useState(getRouteState);
 
   useEffect(() => {
-    const onPopState = () => {
-      setAuthView(window.location.pathname === '/register' ? 'register' : 'login');
-    };
+    const onPopState = () => setRoute(getRouteState());
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
@@ -41,13 +50,14 @@ export default function App() {
   }, [token]);
 
   const navigateAuth = (view) => {
-    setAuthView(view);
+    setRoute({ view, inviteToken: '' });
     window.history.pushState({}, '', view === 'register' ? '/register' : '/');
   };
 
   const handleAuthSuccess = (loggedInUser, accessToken) => {
     setUser(loggedInUser);
     setToken(accessToken);
+    setRoute({ view: 'login', inviteToken: '' });
     window.history.pushState({}, '', '/');
   };
 
@@ -72,8 +82,18 @@ export default function App() {
     );
   }
 
+  if (route.view === 'join') {
+    return (
+      <AcceptInviteView
+        inviteToken={route.inviteToken}
+        onAcceptSuccess={handleAuthSuccess}
+        onSwitchToLogin={() => navigateAuth('login')}
+      />
+    );
+  }
+
   if (!user) {
-    return authView === 'register' ? (
+    return route.view === 'register' ? (
       <RegisterTenantView
         onRegisterSuccess={handleAuthSuccess}
         onSwitchToLogin={() => navigateAuth('login')}

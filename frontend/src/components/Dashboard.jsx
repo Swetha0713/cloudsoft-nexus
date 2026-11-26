@@ -11,6 +11,13 @@ import {
   CheckCircle2,
   Clock,
   Building2,
+  Users,
+  Copy,
+  Check,
+  Trash2,
+  UserCheck,
+  UserX,
+  Link2,
 } from 'lucide-react';
 import { API_BASE, apiRequest } from '../api';
 
@@ -38,6 +45,7 @@ const PIPELINE_STAGES = ['Queued', 'Provisioning', 'HealthCheck', 'Live'];
 
 export default function Dashboard({ user, token, onLogout }) {
   const isSuperAdmin = user.role === 'SuperAdmin';
+  const canManageTeam = ['SuperAdmin', 'TenantAdmin'].includes(user.role);
   const canOperate = ['SuperAdmin', 'TenantAdmin', 'Engineer'].includes(user.role);
 
   const [activeTab, setActiveTab] = useState('deployments');
@@ -47,6 +55,8 @@ export default function Dashboard({ user, token, onLogout }) {
   const [deployments, setDeployments] = useState([]);
   const [tickets, setTickets] = useState([]);
   const [auditLogs, setAuditLogs] = useState([]);
+  const [members, setMembers] = useState([]);
+  const [invites, setInvites] = useState([]);
   const [sseConnected, setSseConnected] = useState(false);
   const [toast, setToast] = useState('');
   const [error, setError] = useState('');
@@ -67,6 +77,15 @@ export default function Dashboard({ user, token, onLogout }) {
     priority: 'P2',
   });
 
+  const [showInviteForm, setShowInviteForm] = useState(false);
+  const [inviteForm, setInviteForm] = useState({
+    tenantId: '',
+    email: '',
+    role: 'Engineer',
+  });
+  const [generatedInviteUrl, setGeneratedInviteUrl] = useState('');
+  const [copiedUrl, setCopiedUrl] = useState(false);
+
   const triggerToast = useCallback((msg) => {
     setToast(msg);
     setTimeout(() => setToast(''), 4500);
@@ -75,26 +94,29 @@ export default function Dashboard({ user, token, onLogout }) {
   const fetchAllData = useCallback(async () => {
     try {
       const qs = isSuperAdmin && selectedTenant ? `?tenantId=${selectedTenant}` : '';
-      const requests = [
-        apiRequest(`/api/ops/analytics${qs}`),
-        apiRequest(`/api/deployments${qs}`),
-        apiRequest(`/api/tickets${qs}`),
-        apiRequest(`/api/ops/audit-logs${qs}`),
-      ];
-      if (isSuperAdmin) requests.push(apiRequest('/api/ops/tenants'));
 
-      const [analyticsRes, depRes, ticketRes, auditRes, tenantRes] = await Promise.all(requests);
+      const [analyticsRes, depRes, ticketRes, auditRes, tenantRes, membersRes, invitesRes] =
+        await Promise.all([
+          apiRequest(`/api/ops/analytics${qs}`),
+          apiRequest(`/api/deployments${qs}`),
+          apiRequest(`/api/tickets${qs}`),
+          apiRequest(`/api/ops/audit-logs${qs}`),
+          isSuperAdmin ? apiRequest('/api/ops/tenants') : Promise.resolve(null),
+          canManageTeam ? apiRequest(`/api/team/members${qs}`) : Promise.resolve(null),
+          canManageTeam ? apiRequest(`/api/team/invites${qs}`) : Promise.resolve(null),
+        ]);
+
       setMetrics(analyticsRes.metrics);
       setDeployments(depRes.deployments);
       setTickets(ticketRes.tickets);
       setAuditLogs(auditRes.logs);
-      if (tenantRes?.tenants) {
-        setTenants(tenantRes.tenants);
-      }
+      if (tenantRes?.tenants) setTenants(tenantRes.tenants);
+      if (membersRes?.members) setMembers(membersRes.members);
+      if (invitesRes?.invites) setInvites(invitesRes.invites);
     } catch (err) {
       setError(err.message);
     }
-  }, [isSuperAdmin, selectedTenant]);
+  }, [isSuperAdmin, canManageTeam, selectedTenant]);
 
   useEffect(() => {
     fetchAllData();
@@ -153,7 +175,7 @@ export default function Dashboard({ user, token, onLogout }) {
         method: 'POST',
         body: JSON.stringify({
           ...depForm,
-          tenantId: isSuperAdmin ? depForm.tenantId || tenants[0]?._id : undefined,
+          tenantId: isSuperAdmin ? depForm.tenantId || selectedTenant || tenants[0]?._id : undefined,
         }),
       });
       setDepForm({ tenantId: '', serviceName: '', version: 'v1.0.0', environment: 'Staging' });
@@ -172,7 +194,9 @@ export default function Dashboard({ user, token, onLogout }) {
         method: 'POST',
         body: JSON.stringify({
           ...ticketForm,
-          tenantId: isSuperAdmin ? ticketForm.tenantId || tenants[0]?._id : undefined,
+          tenantId: isSuperAdmin
+            ? ticketForm.tenantId || selectedTenant || tenants[0]?._id
+            : undefined,
         }),
       });
       setTicketForm({ tenantId: '', title: '', description: '', priority: 'P2' });
@@ -195,6 +219,75 @@ export default function Dashboard({ user, token, onLogout }) {
       setError(err.message);
     }
   };
+
+  const handleCreateInvite = async (e) => {
+    e.preventDefault();
+    setError('');
+    setGeneratedInviteUrl('');
+    try {
+      const res = await apiRequest('/api/team/invites', {
+        method: 'POST',
+        body: JSON.stringify({
+          email: inviteForm.email.trim(),
+          role: inviteForm.role,
+          tenantId: isSuperAdmin
+            ? inviteForm.tenantId || selectedTenant || tenants[0]?._id
+            : undefined,
+        }),
+      });
+      setGeneratedInviteUrl(res.inviteUrl);
+      setCopiedUrl(false);
+      setInviteForm({ tenantId: '', email: '', role: 'Engineer' });
+      setShowInviteForm(false);
+      triggerToast(`Invite link generated for ${res.invite.email}`);
+      await fetchAllData();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const handleRevokeInvite = async (id) => {
+    setError('');
+    try {
+      await apiRequest(`/api/team/invites/${id}`, { method: 'DELETE' });
+      triggerToast('Invitation revoked');
+      await fetchAllData();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const handleToggleMemberStatus = async (member) => {
+    setError('');
+    try {
+      await apiRequest(`/api/team/members/${member._id}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({ isActive: !member.isActive }),
+      });
+      triggerToast(`${member.name} ${member.isActive ? 'suspended' : 'reactivated'}`);
+      await fetchAllData();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  const handleCopyInviteUrl = async () => {
+    if (!generatedInviteUrl) return;
+    try {
+      await navigator.clipboard.writeText(generatedInviteUrl);
+      setCopiedUrl(true);
+      setTimeout(() => setCopiedUrl(false), 2500);
+    } catch {
+      triggerToast('Copy failed — select and copy the link manually');
+    }
+  };
+
+  const navTabs = [
+    { id: 'deployments', label: 'Deployments (FSM)', icon: Rocket },
+    { id: 'tickets', label: 'Incidents & SLA', icon: AlertTriangle },
+    { id: 'audit', label: 'Audit Ledger', icon: FileText },
+    ...(canManageTeam ? [{ id: 'team', label: 'Team & Invites', icon: Users }] : []),
+  ];
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
@@ -313,12 +406,8 @@ export default function Dashboard({ user, token, onLogout }) {
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-3">
-          <div className="flex gap-2">
-            {[
-              { id: 'deployments', label: 'Deployments (FSM)', icon: Rocket },
-              { id: 'tickets', label: 'Incidents & SLA', icon: AlertTriangle },
-              { id: 'audit', label: 'Audit Ledger', icon: FileText },
-            ].map((tab) => {
+          <div className="flex flex-wrap gap-2">
+            {navTabs.map((tab) => {
               const Icon = tab.icon;
               return (
                 <button
@@ -354,6 +443,16 @@ export default function Dashboard({ user, token, onLogout }) {
             >
               <Plus className="w-4 h-4" />
               Raise Incident
+            </button>
+          )}
+
+          {activeTab === 'team' && canManageTeam && (
+            <button
+              onClick={() => setShowInviteForm((v) => !v)}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium transition"
+            >
+              <Plus className="w-4 h-4" />
+              Invite Member
             </button>
           )}
         </div>
@@ -625,6 +724,218 @@ export default function Dashboard({ user, token, onLogout }) {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {activeTab === 'team' && canManageTeam && (
+          <div className="space-y-6">
+            {generatedInviteUrl && (
+              <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-4 space-y-2">
+                <div className="flex items-center gap-2 text-emerald-300 text-xs font-semibold">
+                  <Link2 className="w-4 h-4" />
+                  Single-Use Invite Link Ready (Valid 72 Hours — Copy Now)
+                </div>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <input
+                    readOnly
+                    value={generatedInviteUrl}
+                    onFocus={(e) => e.target.select()}
+                    className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs font-mono text-slate-200"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleCopyInviteUrl}
+                    className="flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium transition shrink-0"
+                  >
+                    {copiedUrl ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    {copiedUrl ? 'Copied!' : 'Copy Link'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {showInviteForm && (
+              <form
+                onSubmit={handleCreateInvite}
+                className={`bg-slate-900 border border-slate-800 rounded-xl p-5 grid grid-cols-1 ${
+                  isSuperAdmin ? 'md:grid-cols-4' : 'md:grid-cols-3'
+                } gap-3 items-end`}
+              >
+                {isSuperAdmin && (
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Tenant</label>
+                    <select
+                      value={inviteForm.tenantId}
+                      onChange={(e) => setInviteForm({ ...inviteForm, tenantId: e.target.value })}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm"
+                    >
+                      {tenants.map((t) => (
+                        <option key={t._id} value={t._id}>{t.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Teammate Email</label>
+                  <input
+                    type="email"
+                    required
+                    placeholder="engineer@company.com"
+                    value={inviteForm.email}
+                    onChange={(e) => setInviteForm({ ...inviteForm, email: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Role</label>
+                  <select
+                    value={inviteForm.role}
+                    onChange={(e) => setInviteForm({ ...inviteForm, role: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm"
+                  >
+                    <option value="Engineer">Engineer (Deploy & Resolve)</option>
+                    <option value="ClientViewer">ClientViewer (Read & Raise Tickets)</option>
+                    <option value="TenantAdmin">TenantAdmin (Full Workspace Admin)</option>
+                  </select>
+                </div>
+                <button
+                  type="submit"
+                  className="bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium px-4 py-2 rounded-lg"
+                >
+                  Generate Invite Link
+                </button>
+              </form>
+            )}
+
+            <div className="space-y-2">
+              <h2 className="text-sm font-semibold text-slate-200">
+                Workspace Members ({members.length})
+              </h2>
+              <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-950/60 text-slate-400 border-b border-slate-800">
+                    <tr>
+                      <th className="px-4 py-3">Name & Email</th>
+                      <th className="px-4 py-3">Workspace</th>
+                      <th className="px-4 py-3">Role</th>
+                      <th className="px-4 py-3">Status</th>
+                      <th className="px-4 py-3 text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/70">
+                    {members.map((m) => {
+                      const isSelf = m._id === user.id;
+                      const isProtected = isSelf || m.role === 'SuperAdmin';
+                      return (
+                        <tr key={m._id} className="hover:bg-slate-800/30">
+                          <td className="px-4 py-3">
+                            <div className="font-medium text-slate-200">
+                              {m.name} {isSelf && <span className="text-indigo-400">(You)</span>}
+                            </div>
+                            <div className="text-slate-400">{m.email}</div>
+                          </td>
+                          <td className="px-4 py-3 text-slate-300">{m.tenantId?.name || '—'}</td>
+                          <td className="px-4 py-3">
+                            <span className="px-2 py-0.5 rounded bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 font-medium">
+                              {m.role}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <span
+                              className={`px-2 py-0.5 rounded-full border font-medium ${
+                                m.isActive !== false
+                                  ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
+                                  : 'bg-rose-500/15 text-rose-300 border-rose-500/30'
+                              }`}
+                            >
+                              {m.isActive !== false ? 'Active' : 'Suspended'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            {!isProtected ? (
+                              <button
+                                onClick={() => handleToggleMemberStatus(m)}
+                                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition ${
+                                  m.isActive !== false
+                                    ? 'bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border-rose-500/30'
+                                    : 'bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
+                                }`}
+                              >
+                                {m.isActive !== false ? (
+                                  <>
+                                    <UserX className="w-3.5 h-3.5" />
+                                    Suspend
+                                  </>
+                                ) : (
+                                  <>
+                                    <UserCheck className="w-3.5 h-3.5" />
+                                    Activate
+                                  </>
+                                )}
+                              </button>
+                            ) : (
+                              <span className="text-slate-600">—</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <h2 className="text-sm font-semibold text-slate-200">
+                Pending Invitations ({invites.length})
+              </h2>
+              <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-950/60 text-slate-400 border-b border-slate-800">
+                    <tr>
+                      <th className="px-4 py-3">Invited Email</th>
+                      <th className="px-4 py-3">Workspace</th>
+                      <th className="px-4 py-3">Role</th>
+                      <th className="px-4 py-3">Expires</th>
+                      <th className="px-4 py-3 text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/70">
+                    {invites.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="px-4 py-6 text-center text-slate-500">
+                          No pending invitations. Click "Invite Member" to generate a link.
+                        </td>
+                      </tr>
+                    ) : (
+                      invites.map((inv) => (
+                        <tr key={inv._id} className="hover:bg-slate-800/30">
+                          <td className="px-4 py-3 font-medium text-slate-200">{inv.email}</td>
+                          <td className="px-4 py-3 text-slate-300">{inv.tenantId?.name || '—'}</td>
+                          <td className="px-4 py-3">
+                            <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-medium">
+                              {inv.role}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-slate-400 whitespace-nowrap">
+                            {new Date(inv.expiresAt).toLocaleString()}
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <button
+                              onClick={() => handleRevokeInvite(inv._id)}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/30 transition"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                              Revoke
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
         )}
       </main>
