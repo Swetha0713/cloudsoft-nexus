@@ -40,12 +40,11 @@ export const authorize = (...allowedRoles) => {
 };
 
 // Enforces strict multi-tenant data isolation at the query level
+// Enforces strict multi-tenant data isolation at the query level
 export const buildTenantFilter = (req) => {
-  if (req.user.role === 'ClientViewer') {
-    return { tenantId: req.user.tenantId };
+  if (req.user.role === 'SuperAdmin') {
+    return req.query.tenantId ? { tenantId: req.query.tenantId } : {};
   }
-  if (req.query.tenantId) {
-    return { tenantId: req.query.tenantId };
-  }
-  return {};
+  // TenantAdmin, Engineer, and ClientViewer are strictly locked to their own tenant
+  return { tenantId: req.user.tenantId };
 };

@@ -13,8 +13,8 @@ router.get('/stream', protect, (req, res) => {
   addSseClient(req, res);
 });
 
-// GET /api/ops/tenants (For Admin/Engineer dropdown filters)
-router.get('/tenants', protect, authorize('SuperAdmin', 'Engineer'), async (req, res) => {
+// GET /api/ops/tenants (SuperAdmin only — lists all active companies)
+router.get('/tenants', protect, authorize('SuperAdmin'), async (req, res) => {
   const tenants = await Tenant.find({ isActive: true }).sort({ name: 1 });
   res.status(200).json({ success: true, tenants });
 });

@@ -2,16 +2,9 @@ import { useState } from 'react';
 import { ShieldCheck, Lock, Mail, ArrowRight } from 'lucide-react';
 import { apiRequest } from '../api';
 
-const DEMO_ACCOUNTS = [
-  { label: 'SuperAdmin', org: 'CloudSoft HQ', email: 'admin@cloudsoft.io' },
-  { label: 'Engineer', org: 'CloudSoft HQ', email: 'engineer@cloudsoft.io' },
-  { label: 'ClientViewer', org: 'Apex FinTech', email: 'client@apexfintech.com' },
-  { label: 'ClientViewer', org: 'MedCore Health', email: 'client@medcore.health' },
-];
-
-export default function LoginView({ onLoginSuccess }) {
-  const [email, setEmail] = useState('admin@cloudsoft.io');
-  const [password, setPassword] = useState('Password@123');
+export default function LoginView({ onLoginSuccess, onSwitchToRegister }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -22,7 +15,7 @@ export default function LoginView({ onLoginSuccess }) {
     try {
       const data = await apiRequest('/api/auth/login', {
         method: 'POST',
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email: email.trim(), password }),
       });
       localStorage.setItem('csn_access_token', data.accessToken);
       localStorage.setItem('csn_refresh_token', data.refreshToken);
@@ -62,6 +55,8 @@ export default function LoginView({ onLoginSuccess }) {
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@company.com"
+                autoComplete="email"
                 required
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500"
               />
@@ -76,6 +71,8 @@ export default function LoginView({ onLoginSuccess }) {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
+                placeholder="Enter your password"
+                autoComplete="current-password"
                 required
                 className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500"
               />
@@ -92,24 +89,15 @@ export default function LoginView({ onLoginSuccess }) {
           </button>
         </form>
 
-        <div className="mt-6 pt-6 border-t border-slate-800">
-          <p className="text-xs font-medium text-slate-400 mb-3">Quick-Fill Demo Credentials (RBAC)</p>
-          <div className="grid grid-cols-2 gap-2">
-            {DEMO_ACCOUNTS.map((acc) => (
-              <button
-                key={acc.email}
-                type="button"
-                onClick={() => {
-                  setEmail(acc.email);
-                  setPassword('Password@123');
-                }}
-                className="text-left px-3 py-2 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-800 transition"
-              >
-                <div className="text-xs font-semibold text-indigo-400">{acc.label}</div>
-                <div className="text-[11px] text-slate-400 truncate">{acc.org}</div>
-              </button>
-            ))}
-          </div>
+        <div className="mt-6 pt-5 border-t border-slate-800 text-center text-xs text-slate-400">
+          New company?{' '}
+          <button
+            type="button"
+            onClick={onSwitchToRegister}
+            className="text-indigo-400 hover:text-indigo-300 font-medium"
+          >
+            Create a workspace
+          </button>
         </div>
       </div>
     </div>

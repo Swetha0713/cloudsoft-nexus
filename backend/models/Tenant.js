@@ -23,6 +23,11 @@ const tenantSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    ownerUserId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
   },
   { timestamps: true }
 );

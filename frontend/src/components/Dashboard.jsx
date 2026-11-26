@@ -37,7 +37,8 @@ const STATUS_BADGE = {
 const PIPELINE_STAGES = ['Queued', 'Provisioning', 'HealthCheck', 'Live'];
 
 export default function Dashboard({ user, token, onLogout }) {
-  const isStaff = user.role === 'SuperAdmin' || user.role === 'Engineer';
+  const isSuperAdmin = user.role === 'SuperAdmin';
+  const canOperate = ['SuperAdmin', 'TenantAdmin', 'Engineer'].includes(user.role);
 
   const [activeTab, setActiveTab] = useState('deployments');
   const [selectedTenant, setSelectedTenant] = useState('');
@@ -73,14 +74,14 @@ export default function Dashboard({ user, token, onLogout }) {
 
   const fetchAllData = useCallback(async () => {
     try {
-      const qs = isStaff && selectedTenant ? `?tenantId=${selectedTenant}` : '';
+      const qs = isSuperAdmin && selectedTenant ? `?tenantId=${selectedTenant}` : '';
       const requests = [
         apiRequest(`/api/ops/analytics${qs}`),
         apiRequest(`/api/deployments${qs}`),
         apiRequest(`/api/tickets${qs}`),
         apiRequest(`/api/ops/audit-logs${qs}`),
       ];
-      if (isStaff) requests.push(apiRequest('/api/ops/tenants'));
+      if (isSuperAdmin) requests.push(apiRequest('/api/ops/tenants'));
 
       const [analyticsRes, depRes, ticketRes, auditRes, tenantRes] = await Promise.all(requests);
       setMetrics(analyticsRes.metrics);
@@ -93,7 +94,7 @@ export default function Dashboard({ user, token, onLogout }) {
     } catch (err) {
       setError(err.message);
     }
-  }, [isStaff, selectedTenant]);
+  }, [isSuperAdmin, selectedTenant]);
 
   useEffect(() => {
     fetchAllData();
@@ -152,7 +153,7 @@ export default function Dashboard({ user, token, onLogout }) {
         method: 'POST',
         body: JSON.stringify({
           ...depForm,
-          tenantId: depForm.tenantId || tenants[0]?._id,
+          tenantId: isSuperAdmin ? depForm.tenantId || tenants[0]?._id : undefined,
         }),
       });
       setDepForm({ tenantId: '', serviceName: '', version: 'v1.0.0', environment: 'Staging' });
@@ -171,7 +172,7 @@ export default function Dashboard({ user, token, onLogout }) {
         method: 'POST',
         body: JSON.stringify({
           ...ticketForm,
-          tenantId: isStaff ? ticketForm.tenantId || tenants[0]?._id : undefined,
+          tenantId: isSuperAdmin ? ticketForm.tenantId || tenants[0]?._id : undefined,
         }),
       });
       setTicketForm({ tenantId: '', title: '', description: '', priority: 'P2' });
@@ -228,7 +229,7 @@ export default function Dashboard({ user, token, onLogout }) {
           </div>
 
           <div className="flex items-center gap-3">
-            {isStaff && (
+            {isSuperAdmin && (
               <div className="flex items-center gap-2 bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5">
                 <Building2 className="w-4 h-4 text-slate-400" />
                 <select
@@ -336,7 +337,7 @@ export default function Dashboard({ user, token, onLogout }) {
             })}
           </div>
 
-          {activeTab === 'deployments' && isStaff && (
+          {activeTab === 'deployments' && canOperate && (
             <button
               onClick={() => setShowDepForm((v) => !v)}
               className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium transition"
@@ -359,23 +360,27 @@ export default function Dashboard({ user, token, onLogout }) {
 
         {activeTab === 'deployments' && (
           <div className="space-y-4">
-            {showDepForm && isStaff && (
+            {showDepForm && canOperate && (
               <form
                 onSubmit={handleCreateDeployment}
-                className="bg-slate-900 border border-slate-800 rounded-xl p-5 grid grid-cols-1 md:grid-cols-5 gap-3 items-end"
+                className={`bg-slate-900 border border-slate-800 rounded-xl p-5 grid grid-cols-1 ${
+                  isSuperAdmin ? 'md:grid-cols-5' : 'md:grid-cols-4'
+                } gap-3 items-end`}
               >
-                <div>
-                  <label className="block text-xs text-slate-400 mb-1">Tenant</label>
-                  <select
-                    value={depForm.tenantId}
-                    onChange={(e) => setDepForm({ ...depForm, tenantId: e.target.value })}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm"
-                  >
-                    {tenants.map((t) => (
-                      <option key={t._id} value={t._id}>{t.name}</option>
-                    ))}
-                  </select>
-                </div>
+                {isSuperAdmin && (
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">Tenant</label>
+                    <select
+                      value={depForm.tenantId}
+                      onChange={(e) => setDepForm({ ...depForm, tenantId: e.target.value })}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm"
+                    >
+                      {tenants.map((t) => (
+                        <option key={t._id} value={t._id}>{t.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <div>
                   <label className="block text-xs text-slate-400 mb-1">Service Name</label>
                   <input
@@ -448,7 +453,7 @@ export default function Dashboard({ user, token, onLogout }) {
                       <FsmPipeline status={dep.status} />
                     </div>
 
-                    {isStaff && (
+                    {canOperate && (
                       <div className="flex flex-wrap gap-2">
                         {nextStates.map((next) => (
                           <button
@@ -480,7 +485,7 @@ export default function Dashboard({ user, token, onLogout }) {
                 className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-3"
               >
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  {isStaff && (
+                  {isSuperAdmin && (
                     <div>
                       <label className="block text-xs text-slate-400 mb-1">Tenant</label>
                       <select
@@ -494,7 +499,7 @@ export default function Dashboard({ user, token, onLogout }) {
                       </select>
                     </div>
                   )}
-                  <div className={isStaff ? '' : 'md:col-span-2'}>
+                  <div className={isSuperAdmin ? '' : 'md:col-span-2'}>
                     <label className="block text-xs text-slate-400 mb-1">Incident Title</label>
                     <input
                       required
@@ -569,7 +574,7 @@ export default function Dashboard({ user, token, onLogout }) {
                     </p>
                   </div>
 
-                  {isStaff && (
+                  {canOperate && (
                     <div className="flex flex-wrap gap-2">
                       {['InProgress', 'Escalated', 'Resolved'].map((st) => (
                         <button

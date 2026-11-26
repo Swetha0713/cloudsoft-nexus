@@ -14,6 +14,7 @@ import { startSlaWorker } from './workers/slaWorker.js';
 dotenv.config();
 
 const app = express();
+app.set('trust proxy', 1); // Required behind Render's reverse proxy
 
 // 1. Security & CORS
 app.use(helmet());
@@ -24,7 +25,7 @@ app.use(
   })
 );
 
-// 2. Rate Limiter
+// 2. Rate Limiters
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 300,
@@ -32,7 +33,19 @@ const apiLimiter = rateLimit({
   legacyHeaders: false,
   message: { success: false, message: 'Too many requests, please try again later.' },
 });
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 15,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many authentication attempts. Try again in 15 minutes.' },
+});
+
 app.use('/api', apiLimiter);
+app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/refresh', authLimiter);
+app.use('/api/auth/register-tenant', authLimiter);
 
 // 3. Body Parser
 app.use(express.json({ limit: '10kb' }));

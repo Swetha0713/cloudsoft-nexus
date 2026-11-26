@@ -40,9 +40,9 @@ router.post('/', protect, async (req, res, next) => {
     return next(new AppError('Title and description are required', 400));
   }
 
-  // ClientViewers are strictly locked to their own JWT tenantId
+  // Only SuperAdmin can specify another tenantId; all other roles are locked to their JWT tenantId
   const resolvedTenantId =
-    req.user.role === 'ClientViewer' ? req.user.tenantId : bodyTenantId || req.user.tenantId;
+    req.user.role === 'SuperAdmin' ? bodyTenantId || req.user.tenantId : req.user.tenantId;
 
   const slaMinutes = SLA_MINUTES_BY_PRIORITY[priority] || 120;
   const slaDeadline = new Date(Date.now() + slaMinutes * 60 * 1000);
@@ -79,8 +79,8 @@ router.post('/', protect, async (req, res, next) => {
   res.status(201).json({ success: true, ticket: populated });
 });
 
-// PATCH /api/tickets/:id/status (SuperAdmin & Engineer only)
-router.patch('/:id/status', protect, authorize('SuperAdmin', 'Engineer'), async (req, res, next) => {
+// PATCH /api/tickets/:id/status (SuperAdmin, TenantAdmin & Engineer)
+router.patch('/:id/status', protect, authorize('SuperAdmin', 'TenantAdmin', 'Engineer'), async (req, res, next) => {
   const { status } = req.body;
   const allowed = ['Open', 'InProgress', 'Escalated', 'Resolved'];
   if (!allowed.includes(status)) {
@@ -90,6 +90,10 @@ router.patch('/:id/status', protect, authorize('SuperAdmin', 'Engineer'), async 
   const ticket = await Ticket.findById(req.params.id);
   if (!ticket) {
     return next(new AppError('Ticket not found', 404));
+  }
+
+  if (req.user.role !== 'SuperAdmin' && ticket.tenantId.toString() !== req.user.tenantId) {
+    return next(new AppError("Forbidden: cannot modify another tenant's ticket", 403));
   }
 
   const previousStatus = ticket.status;

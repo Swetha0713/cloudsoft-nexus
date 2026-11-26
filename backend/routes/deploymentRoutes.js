@@ -35,15 +35,18 @@ router.get('/', protect, async (req, res) => {
   });
 });
 
-// POST /api/deployments (SuperAdmin & Engineer only)
-router.post('/', protect, authorize('SuperAdmin', 'Engineer'), async (req, res, next) => {
+// POST /api/deployments (SuperAdmin, TenantAdmin & Engineer)
+router.post('/', protect, authorize('SuperAdmin', 'TenantAdmin', 'Engineer'), async (req, res, next) => {
   const { tenantId, serviceName, version, environment } = req.body;
-  if (!tenantId || !serviceName || !version) {
-    return next(new AppError('tenantId, serviceName, and version are required', 400));
+  const targetTenantId =
+    req.user.role === 'SuperAdmin' ? tenantId || req.user.tenantId : req.user.tenantId;
+
+  if (!targetTenantId || !serviceName || !version) {
+    return next(new AppError('serviceName and version are required', 400));
   }
 
   const deployment = await Deployment.create({
-    tenantId,
+    tenantId: targetTenantId,
     serviceName,
     version,
     environment: environment || 'Staging',
@@ -57,7 +60,7 @@ router.post('/', protect, authorize('SuperAdmin', 'Engineer'), async (req, res, 
   ]);
 
   await logAudit({
-    tenantId,
+    tenantId: targetTenantId,
     actorId: req.user.id,
     actorRole: req.user.role,
     action: 'DEPLOYMENT_CREATED',
@@ -66,13 +69,13 @@ router.post('/', protect, authorize('SuperAdmin', 'Engineer'), async (req, res, 
     details: { serviceName, version, environment: deployment.environment },
   });
 
-  broadcastEvent('deployment_created', populated, tenantId);
+  broadcastEvent('deployment_created', populated, targetTenantId);
 
   res.status(201).json({ success: true, deployment: populated });
 });
 
 // PATCH /api/deployments/:id/transition (FSM-enforced stage shift)
-router.patch('/:id/transition', protect, authorize('SuperAdmin', 'Engineer'), async (req, res, next) => {
+router.patch('/:id/transition', protect, authorize('SuperAdmin', 'TenantAdmin', 'Engineer'), async (req, res, next) => {
   const { nextStatus, note } = req.body;
   if (!nextStatus) {
     return next(new AppError('nextStatus is required', 400));
@@ -81,6 +84,10 @@ router.patch('/:id/transition', protect, authorize('SuperAdmin', 'Engineer'), as
   const deployment = await Deployment.findById(req.params.id);
   if (!deployment) {
     return next(new AppError('Deployment not found', 404));
+  }
+
+  if (req.user.role !== 'SuperAdmin' && deployment.tenantId.toString() !== req.user.tenantId) {
+    return next(new AppError("Forbidden: cannot modify another tenant's deployment", 403));
   }
 
   const currentStatus = deployment.status;
